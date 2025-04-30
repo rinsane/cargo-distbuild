@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
 use std::{fs, path::PathBuf};
+use colored::*;
 
 #[derive(Parser, Debug)]
 #[command(name = "cargo-distbuild")]
@@ -77,17 +78,17 @@ fn get_cargo_metadata(manifest_path: Option<&Path>) -> Result<CargoMetadata> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    println!("Starting cargo-distbuild...\n");
+    println!("{}", "Starting cargo-distbuild...\n".green().bold());
 
     let nodes = read_nodes_config()?;
-    println!("Nodes config loaded: {:#?}", nodes);
+    println!("{} {:#?}", "Nodes config loaded:".cyan(), nodes);
 
     let metadata = get_cargo_metadata(args.manifest_path.as_deref())?;
-    println!("Found {} packages", metadata.packages.len());
+    println!("{} {}", "Found packages:".magenta(), metadata.packages.len());
 
-    println!("\nDependency Graph:");
+    println!("\n{}", "Dependency Graph:".blue().bold());
     for node in metadata.resolve.nodes {
-        println!("{} -> {:?}", node.id, node.dependencies);
+        println!("{} -> {:?}", node.id.to_string().yellow(), node.dependencies);
     }
 
     Ok(())
