@@ -1,9 +1,10 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use clap::Parser;
+// use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::{fs, path::PathBuf};
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(name = "cargo-distbuild")]
@@ -14,7 +15,9 @@ struct Args {
     manifest_path: Option<PathBuf>,
 }
 
+// Need to use this somewhere
 #[derive(Debug, Deserialize)]
+#[allow(unused)]
 struct NodeConfig {
     ip: String,
     port: u16,
@@ -26,7 +29,9 @@ struct CargoMetadata {
     resolve: Resolve,
 }
 
+// Need to use this somewhere
 #[derive(Debug, Deserialize)]
+#[allow(unused)]
 struct Package {
     id: String,
     name: String,
@@ -72,15 +77,15 @@ fn get_cargo_metadata(manifest_path: Option<&Path>) -> Result<CargoMetadata> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    println!("🚀 Starting cargo-distbuild...\n");
+    println!("Starting cargo-distbuild...\n");
 
     let nodes = read_nodes_config()?;
-    println!("📡 Nodes config loaded: {:#?}", nodes);
+    println!("Nodes config loaded: {:#?}", nodes);
 
     let metadata = get_cargo_metadata(args.manifest_path.as_deref())?;
-    println!("📦 Found {} packages", metadata.packages.len());
+    println!("Found {} packages", metadata.packages.len());
 
-    println!("\n🧱 Dependency Graph:");
+    println!("\nDependency Graph:");
     for node in metadata.resolve.nodes {
         println!("{} -> {:?}", node.id, node.dependencies);
     }
