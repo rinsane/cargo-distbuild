@@ -1,32 +1,30 @@
+#![allow(unused_imports)]
 use anyhow::{Context, Result};
-use std::io::Read;  // Add this import at the top
 use clap::Parser;
-// use serde::{Deserialize, Serialize};
 use colored::*;
-use serde::Deserialize;
-use std::path::Path;
-use std::process::Command;
-use std::{fs, path::PathBuf};
-
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use reqwest::Client;
-use std::fs::File;
-use std::io::Write;
+use serde::Deserialize;
+use std::{
+    collections::{HashMap, HashSet},
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+};
 use tar::Builder;
+use tokio::task;
+use walkdir;
+use toml_edit;
 
 #[derive(Parser, Debug)]
 #[command(name = "cargo-distbuild")]
-#[command(about = "Distributed Rust build tool (crate-level parallelism)")]
+#[command(about = "Distributed Rust build tool")]
 struct Args {
-    /// Optional path to Cargo.toml of the project
     #[arg(long)]
     manifest_path: Option<PathBuf>,
 }
 
-// Need to use this somewhere
-#[derive(Debug, Deserialize)]
-#[allow(unused)]
+#[derive(Debug, Deserialize, Clone)]
 struct NodeConfig {
     ip: String,
     port: u16,
@@ -36,14 +34,14 @@ struct NodeConfig {
 struct CargoMetadata {
     packages: Vec<Package>,
     resolve: Resolve,
+    target_directory: String,
 }
 
-// Need to use this somewhere
 #[derive(Debug, Deserialize)]
 struct Package {
     id: String,
     name: String,
-    version: String,
+    manifest_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,109 +55,162 @@ struct ResolveNode {
     dependencies: Vec<String>,
 }
 
-fn debug_tarball_contents(buffer: &[u8]) -> Result<()> {
-    use std::io::Read;
-    let mut archive = tar::Archive::new(buffer);
-    println!("🔍 Tarball contents:");
-    
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        println!("- {}", entry.path()?.display());
-        
-        // Print first few lines of Cargo.toml
-        if entry.path()?.ends_with("Cargo.toml") {
-            let mut contents = String::new();
-            entry.read_to_string(&mut contents)?;
-            println!("  Cargo.toml content:\n{}", contents);
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Args::parse();
+    println!("{}", "🚀 Starting cargo-distbuild".green().bold());
+
+    let nodes = read_nodes_config()?;
+    let client = Client::new();
+
+    let metadata = get_cargo_metadata(args.manifest_path.as_deref())?;
+    let workspace_root = args.manifest_path
+        .as_ref()
+        .map(|p| p.parent().unwrap().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let target_dir = PathBuf::from(&metadata.target_directory);
+    let packages: HashMap<String, (String, PathBuf)> = metadata
+        .packages
+        .iter()
+        .map(|p| {
+            (
+                p.id.clone(),
+                (p.name.clone(), PathBuf::from(&p.manifest_path)),
+            )
+        })
+        .collect();
+
+    let stages = build_dependency_stages(&metadata)?;
+
+    // Track compiled crates and their rlib file paths
+    let mut built_rlibs: HashMap<String, PathBuf> = HashMap::new();
+    let mut node_idx = 0;
+
+    for stage in stages {
+        println!("\n🔨 Compiling stage with {} crates", stage.len());
+        let mut tasks = Vec::new();
+
+        for pkg_id in stage {
+            let (name, _) = packages.get(&pkg_id).unwrap();
+            let worker = nodes[node_idx % nodes.len()].clone();
+            node_idx += 1;
+
+            let dependencies: Vec<_> = metadata
+                .resolve
+                .nodes
+                .iter()
+                .find(|n| n.id == pkg_id)
+                .map(|node| {
+                    node.dependencies
+                        .iter()
+                        .filter_map(|dep_id| {
+                            packages.get(dep_id).map(|(n, _)| {
+                                let rlib_path = built_rlibs.get(n)?;
+                                Some((n.clone(), rlib_path.clone()))
+                            })?
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let name = name.clone();
+            let target_dir = target_dir.clone();
+            let client = client.clone();
+            let workspace_root = workspace_root.clone();
+
+            tasks.push(task::spawn(async move {
+                let (filename, binary) = compile_task(
+                    client,
+                    worker,
+                    &name,
+                    &workspace_root,
+                    &dependencies,
+                )
+                .await?;
+
+                let output_path = if filename.ends_with(".rlib") {
+                    // For libraries, store in deps directory
+                    let deps_dir = target_dir.join("debug/deps");
+                    fs::create_dir_all(&deps_dir)?;
+                    let path = deps_dir.join(&filename);
+                    fs::write(&path, &binary)?;
+                    println!("✅ Stored {} to {}", name, path.display());
+                    path
+                } else {
+                    // For binaries, store in debug directory
+                    let debug_dir = target_dir.join("debug");
+                    fs::create_dir_all(&debug_dir)?;
+                    let path = debug_dir.join(&filename);
+                    fs::write(&path, &binary)?;
+                    println!("✅ Stored {} to {}", name, path.display());
+                    path
+                };
+
+                Ok::<_, anyhow::Error>((name, output_path))
+            }));
+        }
+
+        for result in futures::future::join_all(tasks).await {
+            match result {
+                Ok(Ok((crate_name, path))) => {
+                    built_rlibs.insert(crate_name, path);
+                }
+                Ok(Err(e)) => eprintln!("❌ Worker failed: {e:?}"),
+                Err(e) => eprintln!("❌ Task join error: {e:?}"),
+            }
         }
     }
+
+    println!("\n🎯 All crates compiled. Run with:");
+    println!("   {}", "cargo run -p <binary> --offline".yellow());
+
     Ok(())
 }
 
+fn build_dependency_stages(metadata: &CargoMetadata) -> Result<Vec<Vec<String>>> {
+    let mut graph = HashMap::new();
+    let mut in_degree = HashMap::new();
 
-
-async fn compile_crate_on_worker(
-    crate_path: &Path,
-    worker: &NodeConfig,
-    crate_name: &str,
-) -> Result<()> {
-    let mut buffer = Vec::new();
-    
-    {
-        let mut tar_builder = tar::Builder::new(&mut buffer);
-        
-        // Add Cargo.toml
-        let cargo_toml_path = crate_path.join("Cargo.toml");
-        let cargo_content = fs::read_to_string(&cargo_toml_path)?;
-        let mut header = tar::Header::new_gnu();
-        header.set_path("Cargo.toml")?;
-        header.set_size(cargo_content.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
-        tar_builder.append(&header, cargo_content.as_bytes())?;
-
-        // Add src/lib.rs with explicit UTF-8 validation
-        let lib_rs_path = crate_path.join("src/lib.rs");
-        let lib_content = fs::read_to_string(&lib_rs_path)
-            .context("Failed to read lib.rs (must be valid UTF-8)")?;
-        
-        let mut header = tar::Header::new_gnu();
-        header.set_path("src/lib.rs")?;
-        header.set_size(lib_content.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
-        tar_builder.append(&header, lib_content.as_bytes())?;
-
-        tar_builder.finish()?;
+    for node in &metadata.resolve.nodes {
+        graph.insert(node.id.clone(), Vec::new());
+        in_degree.insert(node.id.clone(), 0);
     }
 
-    // Verify tarball contents
-    println!("🔍 Verifying tarball contents:");
-    let mut archive = tar::Archive::new(&buffer[..]);
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?.to_path_buf();
-        println!("- {}", path.display());
-        
-        if path.ends_with("lib.rs") {
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
-            println!("  First 50 chars:\n{}", &content[..content.len().min(50)]);
+    for node in &metadata.resolve.nodes {
+        for dep in &node.dependencies {
+            graph.get_mut(dep).unwrap().push(node.id.clone());
+            *in_degree.get_mut(&node.id).unwrap() += 1;
         }
     }
 
-    let client = Client::new();
-    let url = format!("http://{}:{}/compile", worker.ip, worker.port);
+    let mut stages = Vec::new();
+    let mut queue: Vec<String> = in_degree
+        .iter()
+        .filter_map(|(id, &deg)| if deg == 0 { Some(id.clone()) } else { None })
+        .collect();
 
-    let resp = client
-        .post(&url)
-        .header("Content-Type", "application/octet-stream")
-        .body(buffer)
-        .send()
-        .await
-        .context("Failed to send crate to worker")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let error_body = resp.text().await.unwrap_or_default();
-        println!("❌ Worker returned error ({}): {}", status, error_body);
-        return Err(anyhow::anyhow!("Worker error: {}", error_body));
+    while !queue.is_empty() {
+        let mut next = Vec::new();
+        for id in &queue {
+            for dependent in graph.get(id).unwrap_or(&Vec::new()) {
+                let count = in_degree.get_mut(dependent).unwrap();
+                *count -= 1;
+                if *count == 0 {
+                    next.push(dependent.clone());
+                }
+            }
+        }
+        stages.push(queue);
+        queue = next;
     }
 
-    let rlib_bytes = resp.bytes().await?;
-    let deps_dir = PathBuf::from("target/debug/deps/");
-    fs::create_dir_all(&deps_dir)?;
-    let output_path = deps_dir.join(format!("lib{}.rlib", crate_name));
-    fs::write(&output_path, &rlib_bytes)?;
-
-    println!("✅ Compiled {} on {}:{}", crate_name, worker.ip, worker.port);
-    Ok(())
+    Ok(stages)
 }
 
 fn read_nodes_config() -> Result<Vec<NodeConfig>> {
-    let file = fs::read_to_string("nodes.json").context("Failed to read nodes.json")?;
-    let nodes: Vec<NodeConfig> = serde_json::from_str(&file)?;
-    Ok(nodes)
+    let content = fs::read_to_string("nodes.json")?;
+    Ok(serde_json::from_str(&content)?)
 }
 
 fn get_cargo_metadata(manifest_path: Option<&Path>) -> Result<CargoMetadata> {
@@ -170,51 +221,129 @@ fn get_cargo_metadata(manifest_path: Option<&Path>) -> Result<CargoMetadata> {
         cmd.arg("--manifest-path").arg(path);
     }
 
-    let output = cmd.output().context("Failed to run cargo metadata")?;
-
+    let output = cmd.output()?;
     if !output.status.success() {
         return Err(anyhow::anyhow!("cargo metadata failed"));
     }
 
-    let metadata_json = String::from_utf8(output.stdout)?;
-    let metadata: CargoMetadata = serde_json::from_str(&metadata_json)?;
-    Ok(metadata)
+    Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-fn test_tarball_creation(crate_path: &Path) {
-    let mut buffer = Vec::new();
-    {
-        let mut tar = tar::Builder::new(&mut buffer);
-        tar.append_path_with_name(crate_path, "Cargo.toml").unwrap();
+fn print_tarball_contents(buffer: &[u8]) -> Result<()> {
+    use std::io::{Read, Cursor};
+    let mut archive = tar::Archive::new(Cursor::new(buffer));
+    println!("📦 Contents of generated tarball:");
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.to_path_buf();
+        println!("- {}", path.display());
+
+        if path.ends_with("Cargo.toml") {
+            let mut contents = String::new();
+            entry.read_to_string(&mut contents)?;
+            println!(
+                "📝 Cargo.toml:\n{}",
+                contents.lines().take(5).collect::<Vec<_>>().join("\n")
+            );
+        }
     }
-    fs::write("test.tar", &buffer).unwrap();
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    // let args = Args::parse();
-
-    println!("{}", "Starting cargo-distbuild...\n".green().bold());
-
-    let nodes = read_nodes_config()?;
-    println!("{} {:#?}", "Nodes config loaded:".cyan(), nodes);
-
-    // let metadata = get_cargo_metadata(args.manifest_path.as_deref())?;
-    // println!("{} {}", "Found packages:".magenta(), metadata.packages.len());
-
-    // println!("\n{}", "Dependency Graph:".blue().bold());
-    // for node in metadata.resolve.nodes {
-    //     println!("{} -> {:?}", node.id.to_string().yellow(), node.dependencies);
-    // }
-
-    // 👇 TEMPORARY TEST CALL:
-    let crate_path = std::fs::canonicalize("../foo")?;
-    println!("📂 Absolute crate path: {}", crate_path.display());
-    let crate_name = "foo";
-    let worker = &nodes[0];
-
-    test_tarball_creation(&crate_path);
-    compile_crate_on_worker(&crate_path, worker, crate_name).await?;
 
     Ok(())
+}
+
+async fn compile_task(
+    client: Client,
+    worker: NodeConfig,
+    crate_name: &str,
+    workspace_root: &Path,
+    _dependencies: &[(String, PathBuf)],
+) -> Result<(String, Vec<u8>)> {
+    println!("📦 Creating tarball for {}:", crate_name);
+
+    let mut buffer = Vec::new();
+    {
+        let mut tar = Builder::new(&mut buffer);
+
+        // Add workspace Cargo.toml
+        let workspace_cargo = workspace_root.join("Cargo.toml");
+        if !workspace_cargo.exists() {
+            return Err(anyhow::anyhow!("Workspace Cargo.toml not found"));
+        }
+        let mut header = tar::Header::new_gnu();
+        let cargo_bytes = fs::read(&workspace_cargo)?;
+        header.set_size(cargo_bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, "Cargo.toml", cargo_bytes.as_slice())?;
+
+        // Add all crates directories
+        let crates_dir = workspace_root.join("crates");
+        println!("   Adding workspace crates from: {}", crates_dir.display());
+        for entry in walkdir::WalkDir::new(&crates_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let relative_path = entry.path().strip_prefix(workspace_root)?;
+            let path_str = relative_path.display().to_string();
+            
+            if entry.file_type().is_file() {
+                println!("   - {} (reading file...)", path_str);
+                let file_contents = fs::read(entry.path())?;
+                println!("     Read {} bytes", file_contents.len());
+                
+                let mut header = tar::Header::new_gnu();
+                header.set_size(file_contents.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                
+                tar.append_data(&mut header, &path_str, &file_contents[..])?;
+                println!("     Added to tarball");
+            } else if entry.file_type().is_dir() {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_mode(0o755);
+                header.set_size(0);
+                header.set_cksum();
+                tar.append_data(&mut header, &path_str, &[][..])?;
+            }
+        }
+
+        tar.finish()?;
+    }
+
+    println!("   Tarball size: {} bytes", buffer.len());
+
+    // Print tarball contents for debugging
+    print_tarball_contents(&buffer)?;
+
+    // Send to worker with crate name parameter
+    let url = format!("http://{}:{}/compile?crate_name={}", worker.ip, worker.port, crate_name);
+    println!("   Sending to worker: {}", url);
+    
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/octet-stream")
+        .body(buffer)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let error = response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("Worker error: {}", error));
+    }
+
+    // Check headers before consuming response
+    let is_binary = response.headers().contains_key("X-Binary-File");
+    
+    let binary = response.bytes().await?.to_vec();
+    let filename = if is_binary {
+        crate_name.to_string()
+    } else {
+        format!("lib{}.rlib", crate_name)
+    };
+    
+    println!("   Received compiled output: {} ({} bytes)", filename, binary.len());
+    
+    Ok((filename, binary))
 }

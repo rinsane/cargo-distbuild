@@ -14,4 +14,8 @@ tar = "0.4"
 flate2 = "1.0"
 tokio = { version = "1.45.0", features = ["full"] }
 walkdir = "2.3"
+futures = "0.3.31"
+tempfile = "3.19.1"
+toml_edit = "0.22.6"
+toml = "0.8.10"
 
