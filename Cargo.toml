@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "cargo-distbuild"
 path = "src/main.rs"
 
+[[bin]]
+name = "cargo-distbuild-wrapper"
+path = "src/wrapper_main.rs"
+
 [dependencies]
 # Core async runtime
 tokio = { version = "1.45.0", features = ["full"] }

@@ -6,4 +6,5 @@ pub mod proto;
 pub mod scheduler;
 pub mod worker;
 pub mod master;
+pub mod wrapper;
 

@@ -40,11 +40,11 @@ impl SchedulerService {
         let now = chrono::Utc::now().timestamp();
         let mut state = self.state.write().await;
         
-        // Mark workers as offline if heartbeat is too old (30 seconds)
+        // Mark workers as offline if heartbeat is too old (10 seconds)
         let offline_workers: Vec<String> = state
             .workers
             .iter()
-            .filter(|(_, worker)| now - worker.last_heartbeat > 30)
+            .filter(|(_, worker)| now - worker.last_heartbeat > 10)
             .map(|(id, _)| id.clone())
             .collect();
         
@@ -65,7 +65,7 @@ impl SchedulerService {
         let available_workers: Vec<(String, String)> = state
             .workers
             .iter()
-            .filter(|(_, worker)| worker.active_jobs < worker.capacity && now - worker.last_heartbeat < 30)
+            .filter(|(_, worker)| worker.active_jobs < worker.capacity && now - worker.last_heartbeat < 10)
             .map(|(id, worker)| (id.clone(), worker.address.clone()))
             .collect();
 
@@ -283,17 +283,17 @@ impl Scheduler for SchedulerService {
         let now = chrono::Utc::now().timestamp();
         let mut state = self.state.write().await;
         
-        // Remove offline workers (no heartbeat for 30+ seconds)
+        // Remove offline workers (no heartbeat for 10+ seconds)
         let offline_workers: Vec<String> = state
             .workers
             .iter()
-            .filter(|(_, worker)| now - worker.last_heartbeat > 30)
+            .filter(|(_, worker)| now - worker.last_heartbeat > 10)
             .map(|(id, _)| id.clone())
             .collect();
         
         for worker_id in &offline_workers {
             state.workers.remove(worker_id);
-            println!("⚠️  Worker {} removed (offline for >30s)", worker_id);
+            println!("⚠️  Worker {} removed (offline for >10s)", worker_id);
         }
         
         let workers = state
