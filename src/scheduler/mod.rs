@@ -15,6 +15,7 @@ pub struct SchedulerService {
 struct SchedulerState {
     workers: HashMap<String, WorkerMetadata>,
     jobs: HashMap<String, JobMetadata>,
+    next_worker_index: usize, // For round-robin scheduling
 }
 
 impl SchedulerService {
@@ -74,11 +75,19 @@ impl SchedulerService {
         }
 
         // Collect assignments to make outside the lock
+        // Use round-robin scheduling for better load distribution
         let mut assignments = Vec::new();
         
-        for ((job_id, input_hash, job_type, _metadata), (worker_id, worker_addr)) in 
-            pending_jobs.iter().zip(available_workers.iter()) 
-        {
+        let num_workers = available_workers.len();
+        if num_workers == 0 {
+            return;
+        }
+        
+        for (idx, (job_id, input_hash, job_type, _metadata)) in pending_jobs.iter().enumerate() {
+            // Round-robin: pick worker based on counter, not always first!
+            let worker_idx = (state.next_worker_index + idx) % num_workers;
+            let (worker_id, worker_addr) = &available_workers[worker_idx];
+            
             if let Some(job) = state.jobs.get_mut(job_id) {
                 job.status = JobStatusEnum::Assigned;
                 job.assigned_worker = Some(worker_id.clone());
@@ -95,6 +104,9 @@ impl SchedulerService {
                 worker.active_jobs += 1;
             }
         }
+        
+        // Update the round-robin counter for next time
+        state.next_worker_index = (state.next_worker_index + pending_jobs.len()) % num_workers;
         
         // Drop lock before async operations
         drop(state);

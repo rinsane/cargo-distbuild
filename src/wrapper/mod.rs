@@ -1,11 +1,32 @@
 use anyhow::{Context, Result};
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub mod rustc_parser;
 
 use rustc_parser::RustcArgs;
+
+/// Find config.toml by searching up from current directory
+fn find_config_file() -> Option<PathBuf> {
+    let mut current = env::current_dir().ok()?;
+    
+    // Search up to 5 levels up
+    for _ in 0..5 {
+        let config_path = current.join("config.toml");
+        if config_path.exists() {
+            return Some(config_path);
+        }
+        
+        // Go up one directory
+        if !current.pop() {
+            break;
+        }
+    }
+    
+    None
+}
 
 /// Main entry point for the wrapper
 /// Called by Cargo instead of rustc
@@ -108,9 +129,15 @@ async fn compile_distributed(rustc_args: &RustcArgs) -> Result<()> {
     use crate::common::Config;
     use crate::proto::distbuild::scheduler_client::SchedulerClient;
     use crate::proto::distbuild::*;
+    use std::path::PathBuf;
     
-    // Load config
-    let config = Config::load_default()?;
+    // Load config from the cargo-distbuild directory, not current directory
+    // Find the config by looking in parent directories
+    let config = match find_config_file() {
+        Some(config_path) => Config::load(&config_path)?,
+        None => Config::load_default()?, // Fallback to default
+    };
+    
     let cas = Cas::new(&config.cas.root)?;
     
     eprintln!("📦 [cargo-distbuild] Packaging source files for CAS...");
