@@ -1,0 +1,18 @@
+# cargo-distbuild configuration file
+
+[scheduler]
+# Address where the scheduler listens for gRPC connections
+addr = "127.0.0.1:5000"
+
+[cas]
+# Root directory for Content-Addressable Storage
+# All nodes should have access to this path (via NFS/CephFS in production)
+root = "./cas-root"
+
+[worker]
+# How often workers send heartbeats to the scheduler (in seconds)
+heartbeat_interval_secs = 10
+
+# Maximum number of concurrent jobs per worker
+capacity = 4
+

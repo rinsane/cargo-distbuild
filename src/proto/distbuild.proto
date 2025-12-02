@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package distbuild;
+
+// Scheduler Service - runs on the central coordinator
+service Scheduler {
+  // Worker registration
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  
+  // Worker heartbeat
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  
+  // Submit a job from master
+  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+  
+  // Get job status
+  rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
+  
+  // List registered workers
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+  
+  // List jobs
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+}
+
+// Worker Service - runs on each worker node
+service Worker {
+  // Execute a job
+  rpc ExecuteJob(ExecuteJobRequest) returns (ExecuteJobResponse);
+  
+  // Check worker status
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
+
+// Worker Registration
+message RegisterWorkerRequest {
+  string worker_id = 1;
+  string address = 2;  // host:port
+  uint32 capacity = 3; // number of concurrent jobs
+  map<string, string> labels = 4; // metadata (e.g., arch, os)
+}
+
+message RegisterWorkerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Heartbeat
+message HeartbeatRequest {
+  string worker_id = 1;
+  uint32 active_jobs = 2;
+  uint32 available_slots = 3;
+}
+
+message HeartbeatResponse {
+  bool success = 1;
+  repeated string jobs_to_execute = 2; // job IDs assigned to this worker
+}
+
+// Job Submission
+message SubmitJobRequest {
+  string job_id = 1;
+  string input_hash = 2;   // CAS hash of input blob
+  string job_type = 3;     // e.g., "compile", "transform", "test"
+  map<string, string> metadata = 4;
+}
+
+message SubmitJobResponse {
+  bool success = 1;
+  string job_id = 2;
+  string message = 3;
+}
+
+// Job Status
+message GetJobStatusRequest {
+  string job_id = 1;
+}
+
+message GetJobStatusResponse {
+  string job_id = 1;
+  JobStatus status = 2;
+  string output_hash = 3;  // CAS hash of output (if completed)
+  string error = 4;
+  string assigned_worker = 5;
+}
+
+enum JobStatus {
+  PENDING = 0;
+  ASSIGNED = 1;
+  RUNNING = 2;
+  COMPLETED = 3;
+  FAILED = 4;
+}
+
+// List Workers
+message ListWorkersRequest {}
+
+message ListWorkersResponse {
+  repeated WorkerInfo workers = 1;
+}
+
+message WorkerInfo {
+  string worker_id = 1;
+  string address = 2;
+  uint32 capacity = 3;
+  uint32 active_jobs = 4;
+  int64 last_heartbeat = 5; // unix timestamp
+  map<string, string> labels = 6;
+}
+
+// List Jobs
+message ListJobsRequest {
+  uint32 limit = 1; // max number of jobs to return (0 = all)
+}
+
+message ListJobsResponse {
+  repeated JobInfo jobs = 1;
+}
+
+message JobInfo {
+  string job_id = 1;
+  JobStatus status = 2;
+  string input_hash = 3;
+  string output_hash = 4;
+  string assigned_worker = 5;
+  int64 submitted_at = 6;
+  int64 completed_at = 7;
+}
+
+// Worker Job Execution
+message ExecuteJobRequest {
+  string job_id = 1;
+  string input_hash = 2;
+  string job_type = 3;
+  map<string, string> metadata = 4;
+}
+
+message ExecuteJobResponse {
+  bool success = 1;
+  string output_hash = 2;
+  string error = 3;
+  string stdout = 4;
+  string stderr = 5;
+}
+
+// Worker Status
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  string worker_id = 1;
+  uint32 active_jobs = 2;
+  uint32 capacity = 3;
+  bool healthy = 4;
+}
+

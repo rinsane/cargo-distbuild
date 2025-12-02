@@ -1,21 +1,58 @@
 [package]
 name = "cargo-distbuild"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[lib]
+name = "cargo_distbuild"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cargo-distbuild"
+path = "src/main.rs"
 
 [dependencies]
+# Core async runtime
+tokio = { version = "1.45.0", features = ["full"] }
+futures = "0.3.31"
+
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-anyhow = "1.0"
-reqwest = { version = "0.12.15", features = ["json", "multipart", "blocking"] }
+toml = "0.8.10"
+
+# CLI
 clap = { version = "4.4.18", features = ["derive"] }
 colored = "3.0.0"
+rustyline = "14.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Crypto for CAS
+sha2 = "0.10"
+hex = "0.4"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = "0.4"
+dirs = "5.0"
+
+# Old dependencies (keep for now, will remove later)
+reqwest = { version = "0.12.15", features = ["json", "multipart", "blocking"] }
 tar = "0.4"
 flate2 = "1.0"
-tokio = { version = "1.45.0", features = ["full"] }
 walkdir = "2.3"
-futures = "0.3.31"
 tempfile = "3.19.1"
 toml_edit = "0.22.6"
-toml = "0.8.10"
+
+[build-dependencies]
+tonic-build = { version = "0.12", features = ["prost"] }
+prost-build = "0.13"
+protoc-bin-vendored = "3.0"
 

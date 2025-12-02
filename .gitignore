@@ -1,1 +1,23 @@
 /target
+
+# CAS directory (test data)
+/cas-root/
+
+# Test outputs
+*.rlib
+*.rmeta
+
+# Generated proto files (will be regenerated)
+/src/proto/distbuild.rs
+
+# REPL history
+.cargo-distbuild-history
+
+# Temporary test files
+/test-*.txt
+
+# Cannot make docs public right now
+/docs
+
+# Implementation markdowns need to be hidden
+/markdowns
