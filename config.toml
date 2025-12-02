@@ -7,7 +7,8 @@ addr = "127.0.0.1:5000"
 [cas]
 # Root directory for Content-Addressable Storage
 # All nodes should have access to this path (via NFS/CephFS in production)
-root = "./cas-root"
+# MUST be absolute path so all components access the same storage!
+root = "/mnt/Extra/COde_work/Things/cargo-distbuild/cas-root"
 
 [worker]
 # How often workers send heartbeats to the scheduler (in seconds)
