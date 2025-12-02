@@ -3,7 +3,7 @@ use crate::master::commands::CommandExecutor;
 use anyhow::Result;
 use colored::*;
 use rustyline::error::ReadlineError;
-use rustyline::{DefaultEditor, Result as RustyResult};
+use rustyline::DefaultEditor;
 
 pub async fn run_repl() -> Result<()> {
     println!("{}", "🚀 cargo-distbuild interactive shell".bright_green().bold());

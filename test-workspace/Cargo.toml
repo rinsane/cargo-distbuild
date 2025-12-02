@@ -1,0 +1,12 @@
+[workspace]
+members = [
+    "main-binary",
+    "lib-utils",
+    "lib-math",
+    "lib-parser",
+    "lib-common",
+    "lib-advanced"
+]
+
+resolver = "2"
+

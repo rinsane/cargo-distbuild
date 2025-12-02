@@ -1,0 +1,9 @@
+[package]
+name = "lib-parser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lib-common = { path = "../lib-common" }
+lib-utils = { path = "../lib-utils" }
+

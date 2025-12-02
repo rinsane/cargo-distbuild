@@ -21,6 +21,9 @@ service Scheduler {
   
   // List jobs
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  
+  // Report job completion from worker
+  rpc ReportJobResult(ReportJobResultRequest) returns (ReportJobResultResponse);
 }
 
 // Worker Service - runs on each worker node
@@ -30,6 +33,18 @@ service Worker {
   
   // Check worker status
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
+
+// Report job completion back to scheduler
+message ReportJobResultRequest {
+  string job_id = 1;
+  bool success = 2;
+  string output_hash = 3;
+  string error = 4;
+}
+
+message ReportJobResultResponse {
+  bool acknowledged = 1;
 }
 
 // Worker Registration

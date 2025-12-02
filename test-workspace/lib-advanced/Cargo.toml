@@ -1,0 +1,10 @@
+[package]
+name = "lib-advanced"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lib-common = { path = "../lib-common" }
+lib-math = { path = "../lib-math" }
+lib-parser = { path = "../lib-parser" }
+

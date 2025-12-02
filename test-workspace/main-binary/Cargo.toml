@@ -1,0 +1,12 @@
+[package]
+name = "main-binary"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lib-common = { path = "../lib-common" }
+lib-math = { path = "../lib-math" }
+lib-utils = { path = "../lib-utils" }
+lib-parser = { path = "../lib-parser" }
+lib-advanced = { path = "../lib-advanced" }
+

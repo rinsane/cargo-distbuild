@@ -150,28 +150,22 @@ impl WorkerService {
         Ok(())
     }
 
-    async fn execute_job_by_id(&self, job_id: &str) -> Result<()> {
-        // In a real system, we'd fetch job details from scheduler
-        // For now, this is a stub
-        println!("🔨 Executing job: {}", job_id);
+    async fn execute_job_by_id(&self, _job_id: &str) -> Result<()> {
+        // This path is no longer used - jobs come via gRPC ExecuteJob RPC
+        Ok(())
+    }
+    
+    async fn report_completion(&self, job_id: &str, success: bool, output_hash: String, error: String) -> Result<()> {
+        let mut client = SchedulerClient::connect(self.scheduler_addr.clone()).await?;
         
-        let mut state = self.state.write().await;
-        state.active_jobs.insert(
-            job_id.to_string(),
-            JobInfo {
-                job_id: job_id.to_string(),
-                status: "running".to_string(),
-            },
-        );
-        drop(state);
-
-        // Simulate work
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        let mut state = self.state.write().await;
-        state.active_jobs.remove(job_id);
-
-        println!("✅ Job completed: {}", job_id);
+        let request = ReportJobResultRequest {
+            job_id: job_id.to_string(),
+            success,
+            output_hash,
+            error,
+        };
+        
+        client.report_job_result(request).await?;
         Ok(())
     }
 
@@ -179,9 +173,10 @@ impl WorkerService {
         &self,
         job_id: &str,
         input_hash: &str,
-        _job_type: &str,
+        job_type: &str,
     ) -> Result<String> {
         println!("🔨 Worker {} executing job: {}", self.worker_id, job_id);
+        println!("   Job type: {}", job_type);
         println!("   Input hash: {}", input_hash);
 
         // Fetch input from CAS
@@ -190,9 +185,23 @@ impl WorkerService {
 
         println!("   Read {} bytes from CAS", input_data.len());
 
-        // Dummy transformation: append " + processed by worker"
+        // Check if this looks like Rust source code (basic validation)
         let input_str = String::from_utf8_lossy(&input_data);
-        let output = format!("{} + processed by worker {}", input_str, self.worker_id);
+        
+        // For now, simulate compilation validation
+        // Real implementation will extract .rs files and run rustc
+        if !input_str.contains("fn ") && !input_str.contains("pub ") && !input_str.contains("use ") {
+            // Doesn't look like Rust code
+            anyhow::bail!(
+                "Input doesn't appear to be valid Rust source code. \
+                Expected Rust syntax (fn, pub, use, etc.) but found: {}",
+                &input_str.chars().take(100).collect::<String>()
+            );
+        }
+
+        // Dummy transformation: append " + compiled by worker"
+        // In real implementation, this would be: rustc <args> -> .rlib output
+        let output = format!("{} + compiled by worker {}", input_str, self.worker_id);
         let output_bytes = output.as_bytes();
 
         // Write output to CAS
@@ -238,21 +247,29 @@ impl Worker for WorkerService {
             state.active_jobs.remove(&job_id);
         }
 
-        match result {
-            Ok(output_hash) => Ok(Response::new(ExecuteJobResponse {
-                success: true,
-                output_hash,
-                error: String::new(),
-                stdout: String::new(),
-                stderr: String::new(),
-            })),
-            Err(e) => Ok(Response::new(ExecuteJobResponse {
-                success: false,
-                output_hash: String::new(),
-                error: format!("{:?}", e),
-                stdout: String::new(),
-                stderr: String::new(),
-            })),
+        // Report result to scheduler
+        match &result {
+            Ok(output_hash) => {
+                let _ = self.report_completion(&job_id, true, output_hash.clone(), String::new()).await;
+                Ok(Response::new(ExecuteJobResponse {
+                    success: true,
+                    output_hash: output_hash.clone(),
+                    error: String::new(),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                }))
+            }
+            Err(e) => {
+                let error_msg = format!("{:?}", e);
+                let _ = self.report_completion(&job_id, false, String::new(), error_msg.clone()).await;
+                Ok(Response::new(ExecuteJobResponse {
+                    success: false,
+                    output_hash: String::new(),
+                    error: error_msg,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                }))
+            }
         }
     }
 

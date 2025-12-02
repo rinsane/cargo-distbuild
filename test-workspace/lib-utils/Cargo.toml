@@ -1,0 +1,8 @@
+[package]
+name = "lib-utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lib-common = { path = "../lib-common" }
+
