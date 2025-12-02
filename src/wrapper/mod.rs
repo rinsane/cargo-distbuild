@@ -13,31 +13,40 @@ pub async fn run_wrapper() -> Result<()> {
     // Get all arguments passed by Cargo
     let args: Vec<String> = env::args().collect();
     
-    // args[0] is our binary name
-    // args[1..] are the rustc arguments
-    if args.len() < 2 {
-        eprintln!("cargo-distbuild wrapper: No arguments provided");
+    // When RUSTC_WORKSPACE_WRAPPER is used, Cargo calls:
+    // wrapper rustc [rustc-args...]
+    // So:
+    // args[0] = our binary path
+    // args[1] = rustc binary path (we ignore this)
+    // args[2..] = actual rustc arguments
+    
+    if args.len() < 3 {
+        eprintln!("cargo-distbuild wrapper: Not enough arguments");
+        eprintln!("Expected: wrapper rustc [args...]");
         std::process::exit(1);
     }
 
+    // Skip args[0] (our binary) and args[1] (rustc path)
+    let rustc_args_slice = &args[2..];
+
     // Check if this is a query/check operation (should run locally)
-    if should_run_locally(&args[1..]) {
-        return run_local_rustc(&args[1..]);
+    if should_run_locally(rustc_args_slice) {
+        return run_local_rustc(rustc_args_slice);
     }
 
     // Parse rustc arguments
-    let rustc_args = match RustcArgs::parse(&args[1..]) {
+    let rustc_args = match RustcArgs::parse(rustc_args_slice) {
         Ok(args) => args,
         Err(e) => {
             eprintln!("cargo-distbuild wrapper: Failed to parse rustc args: {}", e);
             eprintln!("Falling back to local compilation");
-            return run_local_rustc(&args[1..]);
+            return run_local_rustc(rustc_args_slice);
         }
     };
 
     // For now, if it's not a library compilation, run locally
     if !rustc_args.is_lib {
-        return run_local_rustc(&args[1..]);
+        return run_local_rustc(rustc_args_slice);
     }
 
     eprintln!("🚀 [cargo-distbuild] Intercepted rustc call for crate: {:?}", rustc_args.crate_name);
@@ -52,7 +61,7 @@ pub async fn run_wrapper() -> Result<()> {
         Err(e) => {
             eprintln!("⚠️  [cargo-distbuild] Distributed compilation failed: {}", e);
             eprintln!("   Falling back to local compilation");
-            run_local_rustc(&args[1..])
+            run_local_rustc(rustc_args_slice)
         }
     }
 }
