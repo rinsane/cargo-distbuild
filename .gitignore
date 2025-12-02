@@ -1,4 +1,5 @@
 /target
+/test-workspace/target/
 
 # CAS directory (test data)
 /cas-root/
