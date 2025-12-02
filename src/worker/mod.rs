@@ -47,16 +47,16 @@ impl WorkerService {
         let worker_id = self.worker_id.clone();
         let address = self.address.clone();
         
-        // Start heartbeat loop
+        // Register with scheduler FIRST
+        self.register().await?;
+
+        // Start heartbeat loop AFTER registration
         let heartbeat_worker = self.clone_for_heartbeat();
         tokio::spawn(async move {
             if let Err(e) = heartbeat_worker.heartbeat_loop().await {
                 eprintln!("❌ Heartbeat loop error: {}", e);
             }
         });
-
-        // Register with scheduler
-        self.register().await?;
 
         // Start gRPC server
         let addr = address.parse()?;
